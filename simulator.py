@@ -34,8 +34,8 @@ def logging_setup():
 
 RANDOM_SEED = None
 # RANDOM_SEED = 42
-SIM_TIME = 10 * 60
-AVG_PEOPLE_PER_HOUR = 100
+SIM_TIME = (24 + 3) * 60
+AVG_PEOPLE_PER_HOUR = 5000
 
 
 class Simulator:
@@ -63,6 +63,19 @@ class Simulator:
     def view(self):
         pass
 
+    def get_available_seats(self):
+        total = 0
+        for p in self.places:
+            total += p.available_seats
+        return total
+
+    def get_total_seats(self):
+        total = 0
+        for p in self.places:
+            total += p.total_seats()
+        return total
+
+
     def customer_arrivals(self, simlog):
         """Create new *placegoers* until the sim time reaches 120."""
         yield self.env.timeout(4 * 60)  # aspetto che siano le 4 di mattina
@@ -76,7 +89,7 @@ class Simulator:
                 busy_factor = self.popular_hours_saturday[hour]
 
                 if prevh != currh:
-                    logger.debug(" ** Siamo le %d (busy=%d%%) (%d)" % (hour, busy_factor*100, self.env.now))
+                    logger.debug(" ** Siamo le %d (busy=%d%%) (%d)" % (hour, busy_factor * 100, self.env.now))
                     currh = hour
 
                 # logger.debug("busy_factor={0} AVG_PPL={1} AVG_GROUP_N={2}".format(busy_factor, AVG_PEOPLE_PER_HOUR, self.AVG_GROUP_N))
@@ -84,7 +97,8 @@ class Simulator:
                     yield self.env.timeout(60)
                     continue
 
-                t = random.expovariate(busy_factor * AVG_PEOPLE_PER_HOUR / self.AVG_GROUP_N)
+                # print(hour, busy_factor * AVG_PEOPLE_PER_HOUR / self.AVG_GROUP_N)
+                t = random.expovariate(busy_factor * AVG_PEOPLE_PER_HOUR / self.AVG_GROUP_N / 60)
                 # logger.debug(t)
                 # print(t)
                 yield self.env.timeout(t)
@@ -93,7 +107,7 @@ class Simulator:
                 # todo le persone vanno in locali casuali
                 place = random.choice(self.places)
                 # todo quante persone ci sono in un tavolo?
-                num_seats = random.choices(list(self.group_n.keys()), list(self.group_n.values()))[0]
+                num_seats = random.choices(list(self.group_n.keys()), weights=list(self.group_n.values()))[0]
 
                 if place.available_seats:
                     data = {'place': place, 'num_seats': num_seats, 'id': self.placegoer_progressive,
@@ -154,18 +168,54 @@ class Simulator:
     def analyze(self, simlog: SimulationLog):
         # print(simlog.get_df().mean())
         df = simlog.get_df()
+        df = df[['num_seats', 'time', 'time_exit', 'went_away']]
         df.hist(bins=5)
         plt.show()
 
-        for place in self.places:
-            if place.full:
-                print('Movie "{0}" sold out {1} minutes after ticket counter '
-                      'opening.'.format(place.name, place.when_full))
-                print('  Number of people leaving queue when film sold out: %s' %
-                      place.went_away)
+        # for place in self.places:
+        #     if place.full:
+        #         print('Movie "{0}" sold out {1} minutes after ticket counter '
+        #               'opening.'.format(place.name, place.when_full))
+        #        print('  Number of people leaving queue when film sold out: %s' %
+        #              place.went_away)
 
-    def add_place(self, name='Unnamed place', available_seats=50):
-        self.places.append(Place(self.env, name, available_seats))
+        n_people_by_hour = dict()
+        n_people_left_by_hour = dict()
+        n_people_okay_by_hour = dict()
+        for hour in range(int(SIM_TIME / 60)):
+            n_people = df[
+                (hour * 60 < df['time']) & (df['time'] < (hour + 1) * 60)].sum()['num_seats']
+            n_people_left = df[
+                (hour * 60 < df['time']) & (df['time'] < (hour + 1) * 60) & (df['went_away'] == 1)].sum()['num_seats']
+
+            n_people_okay = df[
+                (hour * 60 < df['time']) & (df['time'] < (hour + 1) * 60) & (df['went_away'] == 0) & (
+                            df['time_exit'] is not None)].sum()['num_seats']
+
+            print(
+                "Between {0} and {1}, there were {2} customers ({3}/{4})".format(hour, hour + 1, n_people,
+                                                                                 n_people_okay, n_people_left))
+            n_people_by_hour[hour] = n_people
+            n_people_left_by_hour[hour] = n_people_left
+
+            n_people_okay_by_hour[hour] = n_people_okay
+
+        print(n_people_by_hour, n_people_okay_by_hour, n_people_left_by_hour)
+
+        plt.bar(n_people_okay_by_hour.keys(), n_people_okay_by_hour.values())
+        plt.bar(n_people_left_by_hour.keys(), n_people_left_by_hour.values(),
+                bottom=list(n_people_okay_by_hour.values()))
+
+        plt.plot([0, SIM_TIME / 60], [sim.get_total_seats() * (60 / person.DINING_TIME)] * 2, linestyle='dashed',
+                 c='green',
+                 markersize=12)
+
+        plt.show()
+        # print(df[bool(0 < (df['time'] / 60) < 0 + 1)])
+        # print(df[df['time'] < 250])
+
+    def add_place(self, name='Unnamed place', available_seats=50, tables4=5, tables6=3, tables8=3):
+        self.places.append(Place(self.env, name, available_seats, tables4=tables4, tables6=tables6, tables8=tables8))
 
 
 if __name__ == '__main__':
@@ -175,8 +225,20 @@ if __name__ == '__main__':
     sim = Simulator()
     logger.debug("Adding places...")
 
-    for x in range(3):
-        sim.add_place(name='Locale %d' % x)
+    small = [4, 2, 2]
+    medium = [8, 3, 3]
+    large = [12, 4, 4]
+
+    tables4 = [4, 8, 12]
+    tables6 = [2, 3, 4]
+    tables8 = [2, 3, 4]
+
+    occurrence = [0.3, 0.6, 0.1]
+
+    for x in range(30):
+        sim.add_place(name='Locale %d' % x, tables4=random.choices(tables4, weights=occurrence)[0],
+                      tables6=random.choices(tables6, weights=occurrence)[0],
+                      tables8=random.choices(tables8, weights=occurrence)[0])
 
     # start the simulation (in a lazy way?)
     sl = sim.start()

@@ -15,6 +15,7 @@ SIM_TIME = 120  # Simulate until
 MAX_PATIENCE = 30
 MIN_PATIENCE = 5
 
+DINING_TIME = 30
 
 def placegoer(env, data):
     """A placegoer tries to buy a number of seats (*num_seats*) for
@@ -96,7 +97,7 @@ def placegoer(env, data):
             env.now, id, num_seats, place.available_seats, place.name))
 
         # todo il tempo passato in un locale cambia (sia a seconda del locale, che a seconda delle persone/gruppo)
-        yield env.timeout(30)
+        yield env.timeout(DINING_TIME)
         # place.available_seats += num_seats
         logger.debug(
             "(%.2f) [%d] freed %d seats (%d left) at [%s] " % (

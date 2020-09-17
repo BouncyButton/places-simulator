@@ -22,6 +22,9 @@ class Place:
         return (self.tables4.capacity - self.tables4.count) * 4 + (self.tables6.capacity - self.tables6.count) * 6 + (
                     self.tables8.capacity - self.tables8.count) * 8
 
+    def total_seats(self):
+        return self.tables4.capacity * 4 + self.tables6.capacity * 6 +  self.tables8.capacity * 8
+
     @available_seats.setter
     def available_seats(self, v):
         self.__available_seats = v
