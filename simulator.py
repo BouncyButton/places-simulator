@@ -1,27 +1,34 @@
 import random
 
 import matplotlib.pyplot as plt
-import numpy
+import numpy as np
 import simpy
 import person
 from place import Place
 # from logging import info, warning, error, debug, critical
 import logging
 import pandas as pd
+from typing import List
 
 # create logger with 'spam_application'
 from simulationlog import SimulationLog
 
+RANDOM_SEED = None
+# RANDOM_SEED = 42
+SIM_TIME = (24 + 3) * 60
+AVG_PEOPLE_PER_HOUR = 2500
+LONG_TAIL_FACTOR = 3
+
 
 def logging_setup():
     logger = logging.getLogger('affluence_simulator')
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     # create file handler which logs even debug messages
     fh = logging.FileHandler('tuttecose.log')
     fh.setLevel(logging.DEBUG)
     # create console handler with a higher log level
     ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
+    ch.setLevel(logging.INFO)
     # create formatter and add it to the handlers
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     fh.setFormatter(formatter)
@@ -32,15 +39,10 @@ def logging_setup():
     return logger
 
 
-RANDOM_SEED = None
-# RANDOM_SEED = 42
-SIM_TIME = (24 + 3) * 60
-AVG_PEOPLE_PER_HOUR = 5000
-
-
 class Simulator:
-    def __init__(self):
+    def __init__(self, app_usage=0.05):
         self.places = []
+        self.popular_places = []
         self.people = []
         self.env = simpy.Environment()
         if RANDOM_SEED is not None:
@@ -57,8 +59,9 @@ class Simulator:
         self.popular_hours_sunday = {}
         self.popular_hours_weekday = {}
 
-        self.group_n = {1: 10, 2: 20, 3: 15, 4: 20, 5: 15, 6: 15, 7: 5}
+        self.group_n = {1: 0, 2: 6, 3: 0, 4: 44, 5: 0, 6: 34, 7: 0, 8: 16}
         self.AVG_GROUP_N = sum([(n * p) / 100 for n, p in zip(self.group_n.keys(), self.group_n.values())])
+        self.APP_USAGE = app_usage
 
     def view(self):
         pass
@@ -74,7 +77,6 @@ class Simulator:
         for p in self.places:
             total += p.total_seats()
         return total
-
 
     def customer_arrivals(self, simlog):
         """Create new *placegoers* until the sim time reaches 120."""
@@ -97,27 +99,31 @@ class Simulator:
                     yield self.env.timeout(60)
                     continue
 
-                # print(hour, busy_factor * AVG_PEOPLE_PER_HOUR / self.AVG_GROUP_N)
                 t = random.expovariate(busy_factor * AVG_PEOPLE_PER_HOUR / self.AVG_GROUP_N / 60)
                 # logger.debug(t)
                 # print(t)
                 yield self.env.timeout(t)
 
-                # logger.debug(" * Alle ore %f arriva una persona" % (self.env.now))
-                # todo le persone vanno in locali casuali
-                place = random.choice(self.places)
-                # todo quante persone ci sono in un tavolo?
+                # le persone vanno in locali casuali (power law)
+                place = random.choices(population=self.places, weights=self.popular_places)[0]
+                # place = random.choice(self.places)
+                # quante persone ci sono in un tavolo?
                 num_seats = random.choices(list(self.group_n.keys()), weights=list(self.group_n.values()))[0]
 
-                if place.available_seats:
-                    data = {'place': place, 'num_seats': num_seats, 'id': self.placegoer_progressive,
-                            'time': self.env.now, 'delta_t': t}
+                # ha l'app?
+                has_app = random.choices([True, False], weights=[self.APP_USAGE, 1 - self.APP_USAGE])[0]
 
-                    self.env.process(person.placegoer(self.env, data))
-                    self.placegoer_progressive += 1
+                # if place.available_seats:
+                data = {'place': place, 'num_seats': num_seats, 'id': self.placegoer_progressive,
+                        'time': self.env.now, 'delta_t': t, 'has_app': has_app}
 
-                    simlog.add_data(data)
+                self.env.process(person.placegoer(self.env, data, self.places))
+                self.placegoer_progressive += 1
+
+                simlog.add_data(data)
                 prevh = hour
+        except Exception as e:
+            print(e)
         finally:
             logger.info('Simulation ended')
             return simlog
@@ -166,82 +172,189 @@ class Simulator:
         plt.show()  # Not required, it seems!
 
     def analyze(self, simlog: SimulationLog):
-        # print(simlog.get_df().mean())
         df = simlog.get_df()
-        df = df[['num_seats', 'time', 'time_exit', 'went_away']]
-        df.hist(bins=5)
-        plt.show()
+        df = df[['num_seats', 'time', 'time_exit', 'went_away', 'waiting_time']]
+        # df.hist(bins=5)
+        # plt.show()
 
-        # for place in self.places:
-        #     if place.full:
-        #         print('Movie "{0}" sold out {1} minutes after ticket counter '
-        #               'opening.'.format(place.name, place.when_full))
-        #        print('  Number of people leaving queue when film sold out: %s' %
-        #              place.went_away)
+        hours_to_show = [23, 24, 25]
 
         n_people_by_hour = dict()
         n_people_left_by_hour = dict()
         n_people_okay_by_hour = dict()
         for hour in range(int(SIM_TIME / 60)):
-            n_people = df[
-                (hour * 60 < df['time']) & (df['time'] < (hour + 1) * 60)].sum()['num_seats']
-            n_people_left = df[
-                (hour * 60 < df['time']) & (df['time'] < (hour + 1) * 60) & (df['went_away'] == 1)].sum()['num_seats']
+            df_hour = df[
+                (hour * 60 < df['time']) & (df['time'] < (hour + 1) * 60)]
 
-            n_people_okay = df[
-                (hour * 60 < df['time']) & (df['time'] < (hour + 1) * 60) & (df['went_away'] == 0) & (
-                            df['time_exit'] is not None)].sum()['num_seats']
+            n_people = df_hour.sum()['num_seats']
 
-            print(
-                "Between {0} and {1}, there were {2} customers ({3}/{4})".format(hour, hour + 1, n_people,
-                                                                                 n_people_okay, n_people_left))
+            waiting_time_histogram_data_okay = []
+            waiting_time_histogram_data_left = []
+
+            # avg_waiting_time = (df_hour['waiting_time'] * df_hour['num_seats'] / n_people)
+            n_people_left = df_hour[df_hour['went_away'] == 1].sum()['num_seats']
+
+            n_people_okay = df_hour[(df_hour['went_away'] == 0) & (
+                    df_hour['time_exit'] is not None)].sum()['num_seats']
+
+            # print(
+            #    "Between {0} and {1}, there were {2} customers ({3}/{4})".format(hour, hour + 1, n_people,
+            # n_people_okay, n_people_left))
             n_people_by_hour[hour] = n_people
             n_people_left_by_hour[hour] = n_people_left
-
             n_people_okay_by_hour[hour] = n_people_okay
 
-        print(n_people_by_hour, n_people_okay_by_hour, n_people_left_by_hour)
+            if hour in hours_to_show:
 
-        plt.bar(n_people_okay_by_hour.keys(), n_people_okay_by_hour.values())
-        plt.bar(n_people_left_by_hour.keys(), n_people_left_by_hour.values(),
-                bottom=list(n_people_okay_by_hour.values()))
+                if not df_hour.empty:
+                    for data_point in df_hour.iterrows():
+                        n = int(data_point[1]['num_seats'])
+                        if np.isnan(data_point[1]['waiting_time']):
+                            continue
+                        if data_point[1]['went_away'] == 1:
+                            waiting_time_histogram_data_left.extend([data_point[1]['waiting_time']] * n)
+                        else:
+                            waiting_time_histogram_data_okay.extend([data_point[1]['waiting_time']] * n)
 
-        plt.plot([0, SIM_TIME / 60], [sim.get_total_seats() * (60 / person.DINING_TIME)] * 2, linestyle='dashed',
-                 c='green',
-                 markersize=12)
+                # plt.hist([waiting_time_histogram_data_okay, waiting_time_histogram_data_left], bins=20, histtype='bar',
+                #          stacked=True)
 
-        plt.show()
+                # plt.title(
+                #     "Tempo attesa, ore {0}. \nN_serviti = {4} Serviti={1:.2%}\n Mediana attesa={2:.2f} \nMediana attesa rimasti={3:.2f}".format(
+                #         hour,
+                #         n_people_okay / (n_people_okay + n_people_left),
+                #         np.median(np.array(waiting_time_histogram_data_okay + waiting_time_histogram_data_left)),
+                #         np.median(waiting_time_histogram_data_okay),
+                #         n_people_okay
+                #     )
+                # )
+                # plt.show()
+
+        # print(n_people_by_hour, n_people_okay_by_hour, n_people_left_by_hour)
+
+        # plt.bar(n_people_okay_by_hour.keys(), n_people_okay_by_hour.values())
+        # plt.bar(n_people_left_by_hour.keys(), n_people_left_by_hour.values(),
+        #         bottom=list(n_people_okay_by_hour.values()))
+        #
+        # plt.plot([0, SIM_TIME / 60], [sim.get_total_seats() * (60 / 60)] * 2, linestyle='dashed',
+        #          c='green',
+        #          markersize=12)
+        #
+        # plt.show()
         # print(df[bool(0 < (df['time'] / 60) < 0 + 1)])
         # print(df[df['time'] < 250])
 
+        n_people_total = df.sum()['num_seats']
+        n_people_okay_total = df[(df['went_away'] != 1)].sum()['num_seats']
+        n_people_left_total = df[df['went_away'] == 1].sum()['num_seats']
+
+        return SingleSimulationResult(n_people_by_hour=n_people_by_hour, n_people_okay_by_hour=n_people_okay_by_hour,
+                                      n_people_left_by_hour=n_people_left_by_hour, n_people=n_people_total,
+                                      n_people_okay=n_people_okay_total, n_people_left=n_people_left_total)
+
     def add_place(self, name='Unnamed place', available_seats=50, tables4=5, tables6=3, tables8=3):
         self.places.append(Place(self.env, name, available_seats, tables4=tables4, tables6=tables6, tables8=tables8))
+
+    def generate_popular_places(self):
+        # self.popular_places = 1 - np.random.power(LONG_TAIL_FACTOR, len(self.places)) + 0.1
+        self.popular_places = 1 - np.random.power(LONG_TAIL_FACTOR, len(self.places)) + 0.05
+        # print(max(self.popular_places)/min(self.popular_places))
+
+
+class SingleSimulationResult:
+    def __init__(self, n_people_by_hour, n_people_okay_by_hour, n_people_left_by_hour, n_people, n_people_okay,
+                 n_people_left):
+        self.n_people_by_hour = n_people_by_hour
+        self.n_people_okay_by_hour = n_people_okay_by_hour
+        self.n_people_left_by_hour = n_people_left_by_hour
+        self.n_people = n_people
+        self.n_people_okay = n_people_okay
+        self.n_people_left = n_people_left
+
+
+def monte_carlo_simulation(app_usage=0.05, N=100):
+    simulations = []
+    for i in range(N):
+        if i % (N / 10) == 0:
+            logger.info("Simulations progress: {0:.1%}".format(i / N))
+        sim = Simulator(app_usage=app_usage)
+        logger.debug("Adding places...")
+
+        tables4 = [4, 8, 12]
+        tables6 = [2, 4, 6]
+        tables8 = [2, 3, 4]
+
+        occurrence = [0.3, 0.6, 0.1]
+
+        for x in range(30):
+            sim.add_place(name='Locale %d' % x, tables4=random.choices(tables4, weights=occurrence)[0],
+                          tables6=random.choices(tables6, weights=occurrence)[0],
+                          tables8=random.choices(tables8, weights=occurrence)[0])
+        sim.generate_popular_places()
+        # start the simulation
+        sl = sim.start()
+
+        # analyze the results
+        res = sim.analyze(sl)
+
+        simulations.append(res)
+
+    return simulations
+
+
+def analyze_simulations(sims: List[SingleSimulationResult], desc):
+    N = len(sims)
+    total_okay_customers = []
+    total_left_customers = []
+    total_customers = []
+    for sim in sims:
+        total_okay_customers.append(sim.n_people_okay)
+        total_left_customers.append(sim.n_people_left)
+        total_customers.append(sim.n_people)
+
+    print(desc)
+    print("Total customers: avg={0}, std={1}".format(np.mean(total_customers), np.std(total_customers)))
+    print("Customer served: avg={0}, std={1} (%={2:.2%})".format(
+        np.mean(total_okay_customers), np.std(total_okay_customers),
+        np.mean(np.array(total_okay_customers) / np.array(total_customers))))
+
+    result = dict()
+    result['total_okay_customers_avg'] = np.mean(total_okay_customers),
+    result['total_okay_customers_std'] = np.std(total_okay_customers),
+    result['total_left_customers_avg'] = np.mean(total_left_customers),
+    result['total_left_customers_std'] = np.std(total_left_customers),
+    result['total_customers_avg'] = np.mean(total_customers),
+    result['total_customers_std'] = np.std(total_customers),
+
+    return result
 
 
 if __name__ == '__main__':
     logger = logging_setup()
     # initialize the simulator
-    logger.debug("Initializing simulator...")
-    sim = Simulator()
-    logger.debug("Adding places...")
+    logger.info("Initializing...")
 
-    small = [4, 2, 2]
-    medium = [8, 3, 3]
-    large = [12, 4, 4]
+    N = 50
+    resolution = 5
+    logger.info("Running {0} simulations for scenario 1...".format(N))
 
-    tables4 = [4, 8, 12]
-    tables6 = [2, 3, 4]
-    tables8 = [2, 3, 4]
+    multi_sims = []
+    x = np.geomspace(0.1, 1.1, resolution) - 0.1
+    for app_usage in x:
+        simulations = monte_carlo_simulation(app_usage=app_usage, N=N)
 
-    occurrence = [0.3, 0.6, 0.1]
+        logger.info("Running {0} simulations for scenario app_usage={1}...".format(N, app_usage))
+        res_simulations = analyze_simulations(simulations, "Uso app {0:%}%".format(app_usage))
+        multi_sims.append(res_simulations)
 
-    for x in range(30):
-        sim.add_place(name='Locale %d' % x, tables4=random.choices(tables4, weights=occurrence)[0],
-                      tables6=random.choices(tables6, weights=occurrence)[0],
-                      tables8=random.choices(tables8, weights=occurrence)[0])
+    customer_served_all_avg = np.array([x['total_okay_customers_avg'] for x in multi_sims])
+    customer_served_all_std = np.array([x['total_okay_customers_std'] for x in multi_sims])
 
-    # start the simulation (in a lazy way?)
-    sl = sim.start()
+    customer_served_all_avg = customer_served_all_avg.reshape(-1)
+    customer_served_all_std = customer_served_all_std.reshape(-1)
 
-    # analyze the results (computing now?)
-    sim.analyze(sl)
+    f, ax = plt.subplots(1)
+
+    ax.errorbar(x, customer_served_all_avg, yerr=customer_served_all_std)
+    ax.set_ylim(ymin=0)
+    plt.show()
