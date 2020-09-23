@@ -182,6 +182,9 @@ class Simulator:
         n_people_by_hour = dict()
         n_people_left_by_hour = dict()
         n_people_okay_by_hour = dict()
+        all_waiting_time_histogram_data_okay = []
+        all_waiting_time_histogram_data_left = []
+
         for hour in range(int(SIM_TIME / 60)):
             df_hour = df[
                 (hour * 60 < df['time']) & (df['time'] < (hour + 1) * 60)]
@@ -204,7 +207,7 @@ class Simulator:
             n_people_left_by_hour[hour] = n_people_left
             n_people_okay_by_hour[hour] = n_people_okay
 
-            if hour in hours_to_show:
+            if True:  # hour in hours_to_show:
 
                 if not df_hour.empty:
                     for data_point in df_hour.iterrows():
@@ -215,6 +218,9 @@ class Simulator:
                             waiting_time_histogram_data_left.extend([data_point[1]['waiting_time']] * n)
                         else:
                             waiting_time_histogram_data_okay.extend([data_point[1]['waiting_time']] * n)
+
+                    all_waiting_time_histogram_data_left.extend(waiting_time_histogram_data_left)
+                    all_waiting_time_histogram_data_okay.extend(waiting_time_histogram_data_okay)
 
                 # plt.hist([waiting_time_histogram_data_okay, waiting_time_histogram_data_left], bins=20, histtype='bar',
                 #          stacked=True)
@@ -235,11 +241,12 @@ class Simulator:
         # plt.bar(n_people_okay_by_hour.keys(), n_people_okay_by_hour.values())
         # plt.bar(n_people_left_by_hour.keys(), n_people_left_by_hour.values(),
         #         bottom=list(n_people_okay_by_hour.values()))
-        #
+        # plt.title("Clienti per fascia oraria")
+
         # plt.plot([0, SIM_TIME / 60], [sim.get_total_seats() * (60 / 60)] * 2, linestyle='dashed',
         #          c='green',
-        #          markersize=12)
-        #
+        #         markersize=12)
+
         # plt.show()
         # print(df[bool(0 < (df['time'] / 60) < 0 + 1)])
         # print(df[df['time'] < 250])
@@ -250,7 +257,9 @@ class Simulator:
 
         return SingleSimulationResult(n_people_by_hour=n_people_by_hour, n_people_okay_by_hour=n_people_okay_by_hour,
                                       n_people_left_by_hour=n_people_left_by_hour, n_people=n_people_total,
-                                      n_people_okay=n_people_okay_total, n_people_left=n_people_left_total)
+                                      n_people_okay=n_people_okay_total, n_people_left=n_people_left_total,
+                                      waiting_times_okay=all_waiting_time_histogram_data_okay,
+                                      waiting_times_left=all_waiting_time_histogram_data_left)
 
     def add_place(self, name='Unnamed place', available_seats=50, tables4=5, tables6=3, tables8=3):
         self.places.append(Place(self.env, name, available_seats, tables4=tables4, tables6=tables6, tables8=tables8))
@@ -263,13 +272,15 @@ class Simulator:
 
 class SingleSimulationResult:
     def __init__(self, n_people_by_hour, n_people_okay_by_hour, n_people_left_by_hour, n_people, n_people_okay,
-                 n_people_left):
+                 n_people_left, waiting_times_okay, waiting_times_left):
         self.n_people_by_hour = n_people_by_hour
         self.n_people_okay_by_hour = n_people_okay_by_hour
         self.n_people_left_by_hour = n_people_left_by_hour
         self.n_people = n_people
         self.n_people_okay = n_people_okay
         self.n_people_left = n_people_left
+        self.waiting_times_okay = waiting_times_okay
+        self.waiting_times_left = waiting_times_left
 
 
 def monte_carlo_simulation(app_usage=0.05, N=100):
@@ -307,26 +318,61 @@ def analyze_simulations(sims: List[SingleSimulationResult], desc):
     total_okay_customers = []
     total_left_customers = []
     total_customers = []
+    waiting_times_okay = []
+    waiting_times_left = []
+    waiting_times_all = []
+
     for sim in sims:
         total_okay_customers.append(sim.n_people_okay)
         total_left_customers.append(sim.n_people_left)
         total_customers.append(sim.n_people)
+        waiting_times_okay.extend(sim.waiting_times_okay)
+        waiting_times_left.extend(sim.waiting_times_left)
+        waiting_times_all.extend(sim.waiting_times_okay)
+        waiting_times_all.extend(sim.waiting_times_left)
 
     print(desc)
     print("Total customers: avg={0}, std={1}".format(np.mean(total_customers), np.std(total_customers)))
-    print("Customer served: avg={0}, std={1} (%={2:.2%})".format(
+    print("Customers served: avg={0}, std={1} (%={2:.2%})".format(
         np.mean(total_okay_customers), np.std(total_okay_customers),
         np.mean(np.array(total_okay_customers) / np.array(total_customers))))
 
+    print("Customers lost: avg={0}, std={1} (%={2:.2%})".format(
+        np.mean(total_left_customers), np.std(total_left_customers),
+        np.mean(np.array(total_left_customers) / np.array(total_customers))))
+
+    print("Avg waiting time ALL: avg={0}, std={1}".format(np.mean(waiting_times_all), np.std(waiting_times_all)))
+
     result = dict()
-    result['total_okay_customers_avg'] = np.mean(total_okay_customers),
-    result['total_okay_customers_std'] = np.std(total_okay_customers),
-    result['total_left_customers_avg'] = np.mean(total_left_customers),
-    result['total_left_customers_std'] = np.std(total_left_customers),
-    result['total_customers_avg'] = np.mean(total_customers),
-    result['total_customers_std'] = np.std(total_customers),
+    result['total_okay_customers_avg'] = np.mean(total_okay_customers)
+    result['total_okay_customers_std'] = np.std(total_okay_customers)
+    result['total_left_customers_avg'] = np.mean(total_left_customers)
+    result['total_left_customers_std'] = np.std(total_left_customers)
+    result['total_customers_avg'] = np.mean(total_customers)
+    result['total_customers_std'] = np.std(total_customers)
+    result['total_waiting_time_okay_avg'] = np.mean(waiting_times_okay)
+    result['total_waiting_time_okay_std'] = np.std(waiting_times_okay)
+    result['total_waiting_time_left_avg'] = np.mean(waiting_times_left)
+    result['total_waiting_time_left_std'] = np.std(waiting_times_left)
+    result['total_waiting_time_all_avg'] = np.mean(waiting_times_all)
+    result['total_waiting_time_all_std'] = np.std(waiting_times_all)
 
     return result
+
+
+def plot_analysis(x, avg, std, desc):
+    customer_served_all_avg = np.array([d[avg] for d in multi_sims])
+    customer_served_all_std = np.array([d[std] for d in multi_sims])
+
+    # customer_served_all_avg = customer_served_all_avg.reshape(-1)
+    # customer_served_all_std = customer_served_all_std.reshape(-1)
+
+    f, ax = plt.subplots(1)
+
+    ax.errorbar(x, customer_served_all_avg, yerr=customer_served_all_std)
+    ax.set_ylim(ymin=0)
+    plt.title(desc)
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -336,25 +382,23 @@ if __name__ == '__main__':
 
     N = 50
     resolution = 5
-    logger.info("Running {0} simulations for scenario 1...".format(N))
+
 
     multi_sims = []
     x = np.geomspace(0.1, 1.1, resolution) - 0.1
     for app_usage in x:
+        logger.info("Running {0} simulations for scenario app_usage={1}...".format(N, app_usage))
+
         simulations = monte_carlo_simulation(app_usage=app_usage, N=N)
 
-        logger.info("Running {0} simulations for scenario app_usage={1}...".format(N, app_usage))
         res_simulations = analyze_simulations(simulations, "Uso app {0:%}%".format(app_usage))
         multi_sims.append(res_simulations)
 
-    customer_served_all_avg = np.array([x['total_okay_customers_avg'] for x in multi_sims])
-    customer_served_all_std = np.array([x['total_okay_customers_std'] for x in multi_sims])
-
-    customer_served_all_avg = customer_served_all_avg.reshape(-1)
-    customer_served_all_std = customer_served_all_std.reshape(-1)
-
-    f, ax = plt.subplots(1)
-
-    ax.errorbar(x, customer_served_all_avg, yerr=customer_served_all_std)
-    ax.set_ylim(ymin=0)
-    plt.show()
+    plot_analysis(x, 'total_okay_customers_avg', 'total_okay_customers_std', "Clienti serviti")
+    plot_analysis(x, 'total_left_customers_avg', 'total_left_customers_std', "Clienti andati via")
+    plot_analysis(x, 'total_waiting_time_okay_avg', 'total_waiting_time_okay_std',
+                  "Tempo di attesa medio per clienti serviti")
+    plot_analysis(x, 'total_waiting_time_left_avg', 'total_waiting_time_left_std',
+                  "Tempo di attesa medio per clienti andati via")
+    plot_analysis(x, 'total_waiting_time_all_avg', 'total_waiting_time_all_std',
+                  "Tempo di attesa medio per clienti")

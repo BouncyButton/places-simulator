@@ -65,7 +65,7 @@ def placegoer(env, data, places):
             # env.timeout(travel_time)
             logger.debug(
                 "(%.2f) [%d] chooses to go at [%s] using the app (free=%d)" % (
-                env.now, id, place.name, place.available_seats))
+            env.now, id, place.name, place.available_seats))
 
     with place.reception.request() as my_turn:
         # logger.debug("[id=%d] (%d) è il mio turno per prendere %d biglietti al locale %s!" % (id, env.now, num_seats, place.name))
